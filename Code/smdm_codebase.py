@@ -20,6 +20,8 @@ for fn in uploaded.keys():
 from google.colab import drive
 drive.mount('/gdrive')
 
+!pip install empath
+
 # Import basic maths and processing libraries.
 import pandas as pd
 import numpy as np
@@ -33,8 +35,15 @@ from keras.models import Model
 from keras.callbacks import EarlyStopping
 from keras.optimizers import Adam
 
+from nltk.tag import StanfordPOSTagger
+from nltk.tag import StanfordNERTagger
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import LabelEncoder
+from empath import Empath
+
 import pickle
 import codecs
+from collections import deque
 
 tokenizer = RegexpTokenizer(r'\w+') # try removing r
 detokenizer = TreebankWordDetokenizer()
@@ -91,7 +100,7 @@ for each in all_words:
     else:
         embeddings[each]=model[each]
 
-embeddings['<pad>'] = [O]*300
+embeddings['<pad>'] = [0]*300
 embeddings['<start>'] = model["start"]
 embeddings['<end>'] = model["end"]
 
@@ -141,8 +150,8 @@ for i in range(len(ppd['right_context'])):
 
 # Embedding Candidate Word
 keras_middle = []
-for i in range(len(ppd['Candidate_words'])):
-    keras_middle.append(embeddings[ppd['Candidate_words'][i]])
+for i in range(len(ppd['Candidate_word'])):
+    keras_middle.append(embeddings[ppd['Candidate_word'][i]])
 
 labels = ppd['target_status']
 
@@ -150,90 +159,55 @@ labels = ppd['target_status']
 # f = open(b"Data_fast.pkl","wb")
 # pickle.dump(zip(keras_left_context,keras_right_context,keras_middle,ppd['target_status']),f)
 
-"""LIWC Trie Functions"""
-
-class LiwcTrieNode(object):
-    def __init__(self, char: str):
-        self.char = char
-        self.word_finished = False
-        self.children = []
-
-def create_trie(liwc_dict):
-	T = Liwc_Trie_Node()
-	for category, words in liwc_dict.items():
-		# print category, "starting"
-		for word in words:
-			insert_word(T, word, category)
-			# print "\t", word.encode("utf-8"), "inserted"
-		# print category, "done"
-	return T
-
-def insert_word(T, word, category):
-	if word[len(word) - 1] != "*":
-		word = word + "$"
-	t = T
-	i = 0
-	while i < len(word):
-		match = False
-		for child in t.children:
-			if child.character == word[i]:
-				match = True
-				t = child
-				break
-		if match == False:
-			break
-		else:
-			i = i + 1
-	while i < len(word):
-		child = Liwc_Trie_Node()
-		child.character = word[i]
-		t.children.append(child)
-		t = child
-		i = i + 1
-	t.categories.add(category)
-
-def get_liwc_categories(T, word):
-	t = T
-	categories = set([])
-	i = 0
-	word = word + "$"
-	while i < len(word):
-		match = False
-		for child in t.children:
-			if child.character == "*":
-				categories = categories.union(child.categories)
-			elif child.character == word[i]:
-				match = True
-				t = child
-				break
-		if match == False:
-			break
-		else:
-			i = i + 1
-	if i == len(word):
-		categories = categories.union(t.categories)
-	return categories
-
 """Socio-Linguistic Feature Extraction
 
 """
 
+ohe=OneHotEncoder()
+lb=LabelEncoder()
 
+# Using Stanford POS Tagger API
+jar = '/gdrive/MyDrive/features/stanford-postagger-3.9.2.jar'
+model = '/gdrive/MyDrive/features/english-left3words-distsim.tagger'
+pos_tagger = StanfordPOSTagger(model, jar, encoding='utf8')
+
+# Extracting POS Features
+POS_snippets=[]
+for i in range(len(df['Snippet'])):
+    # think about .lower()
+    POS_snippets.extend(pos_tagger.tag(clearLine(df['Snippet'][i]).lower().split()))
+POS_snippets_type=[x[1] for x in POS_snippets]
+POS_snippets_type=lb.fit_transform(POS_snippets_type)	
+pos_vec=ohe.fit_transform(np.reshape(POS_snippets_type,(-1, 1)))
+pos_vec=pos_vec.todense()
+
+# Using Stanford NER Tagger API
+jar_n = '/gdrive/MyDrive/features/stanford-ner-3.9.2.jar'
+model_n = '/gdrive/MyDrive/features/english.all.3class.distsim.crf.ser.gz'
+ner_tagger = StanfordNERTagger(model_n, jar_n, encoding='utf8')
+
+# Extracting NER Features
+ner_snippets=[]
+for i in range(len(df['Snippet'])):
+    ner_snippets.extend(ner_tagger.tag(clearLine(df['Snippet'][i]).lower().split()))
+ner_snippets_type=[x[1] for x in ner_snippets]
+ner_snippets_type=lb.fit_transform(ner_snippets_type)	
+ner_vec=ohe.fit_transform(np.reshape(ner_snippets_type,(-1, 1)))
+ner_vec=ner_vec.todense()
+
+# Extracting Empath Features
+lexicon = Empath()
+empath_vec=[]
+for text in ppd['Candidate_word']:
+    a=lexicon.analyze(text, normalize=True)
+    bv=[]
+    for i in a.values():
+        bv.append(i)
+    empath_vec.append(bv)
 
 """Model
 
 """
-
-# Tuned-Hyper Parameters
-embed_size = 1024
-hidden_size = 32
-num_epochs=30
-layer_size = 16
-batch_size = 64
-
-# 'Uni' : Unidirectional LSTM  |  'Bi' : Bidirectional LSTM  | 'TD' : Target-dependent LSTM
-mode = 'Uni' 
-augmentation = False
 
 # Function to group together candidate-words belonging to the same line.
 def compress():
@@ -272,8 +246,7 @@ def prep (train_indices, test_indices):
     train_middle = []
     train_labels = []
     train_pos_vec= []
-    train_neg_vec= []
-    train_liwc_vec=[]
+    train_ner_vec= []
     train_empath_vec=[]
 
     for id in train_ids:
@@ -282,8 +255,7 @@ def prep (train_indices, test_indices):
         train_middle.append(keras_middle[id])
         train_labels.append(labels[id])
         train_pos_vec.append(pos_vec[id])
-        train_neg_vec.append(ner_vec[id])
-        train_liwc_vec.append(liwc_vec[id])
+        train_ner_vec.append(ner_vec[id])
         train_empath_vec.append(empath_vec[id])
 
     train_left   = np.array(train_left)
@@ -292,18 +264,16 @@ def prep (train_indices, test_indices):
     train_labels = np.array(train_labels)
     train_middle = np.expand_dims(train_middle,axis=1)
     train_pos_vec= np.array(train_pos_vec)
-    train_neg_vec= np.array(train_neg_vec)
-    train_liwc_vec= np.array(train_liwc_vec)
+    train_ner_vec= np.array(train_ner_vec)
     train_empath_vec= np.array(train_empath_vec)
 
-    # Training Data Preparion
+    # Testing Data Preparation
     val_left   = []
     val_right  = []
     val_middle = []
     val_labels = []
     val_pos_vec= []
-    val_neg_vec= []
-    val_liwc_vec=[]
+    val_ner_vec= []
     val_empath_vec=[]
 
     for id in test_ids:
@@ -313,7 +283,6 @@ def prep (train_indices, test_indices):
         val_labels.append(labels[id])
         val_pos_vec.append(pos_vec[id])
         val_ner_vec.append(ner_vec[id])
-        val_liwc_vec.append(liwc_vec[id])
         val_empath_vec.append(empath_vec[id])
 
     val_left   = np.array(val_left)
@@ -323,16 +292,174 @@ def prep (train_indices, test_indices):
     val_middle = np.expand_dims(val_middle, axis=1)
     val_pos_vec=np.array(val_pos_vec)
     val_ner_vec=np.array(val_ner_vec)
-    val_liwc_vec=np.array(val_liwc_vec)
     val_empath_vec=np.array(val_empath_vec)
 
     # Below part only for TD lstm
     if mode == 'TD':	    
-    	train_left = np.concatenate((train_left, train_middle), axis=1)
-	train_right = np.concatenate((train_middle, train_right), axis=1)
-    	val_left = np.concatenate((val_left, val_middle), axis=1)
-    	val_right = np.concatenate((val_middle, val_right), axis=1)
-    return(train_left,train_right,train_middle,train_pos_vec,train_ner_vec,train_liwc_vec,train_empath_vec,train_labels,val_left,val_right,val_middle,val_pos_vec,val_neg_vec,val_liwc_vec,val_empath_vec,val_labels)
+      train_left = np.concatenate((train_left, train_middle), axis=1)
+      train_right = np.concatenate((train_middle, train_right), axis=1)
+      val_left = np.concatenate((val_left, val_middle), axis=1)
+      val_right = np.concatenate((val_middle, val_right), axis=1)
+
+    return(train_left,train_right,train_middle,train_pos_vec,train_ner_vec,train_empath_vec,train_labels,val_left,val_right,val_middle,val_pos_vec,val_ner_vec,val_empath_vec,val_labels)
+
+def de_comp(arr, test_indices):
+    arr = deque(arr)
+    fin = []
+    for i in test_indices:
+        temp = []
+        for j in range(len(comp[i])):
+            temp.append(arr.popleft())
+        fin.append(temp)
+    return (fin)
+
+def accuracy (pred, labels, test_indices):
+    pred = pred[0]
+    num_sent = len(comp)
+    num_words = len(pred)
+    threshold = 0
+    cnt = 0
+    # Threshold calculation for binary classification problem
+    for a,b in zip (pred,labels):
+        if b==1.0:
+            threshold+=a
+            cnt+=1
+    threshold = threshold.item()/cnt
+
+    pred_th = []
+    for x in pred:
+        if (x<=threshold):
+            pred_th.append(0)
+        else :
+            pred_th.append(1)
+
+    pred_th = np.array(pred_th)
+    print ("Number of Test sentences : {}".format(len(test_indices)))
+    error = pred_th-labels
+    error_d  = de_comp(error,test_indices)
+    labels_d = de_comp(labels,test_indices)
+    pred_d   = de_comp(pred_th,test_indices)
+    em_cnt = 0
+    ds_cnt = 0
+    mic_f1 = 0
+
+    for err in error_d:
+        if (sum(err)==0):
+           em_cnt += 1
+        ds_cnt += float(len(err)-sum(np.abs(err)))/len(err)
+
+    for lab, pre in zip(labels_d,pred_d):
+
+        tp = 0
+        fp = 0
+        fn = 0
+        tn = 0
+              
+        for i,j in zip(lab,pre):
+            if (int(i) == 1)  and (int(j) ==0) :
+                fn += 1
+            elif (int(i) == 0)  and (int(j) ==1) :
+                fp += 1
+            elif (int(i) == 0)  and (int(j) ==0) :
+                tn += 1
+            elif (int(i) == 1) and (int(j) ==1):
+                tp += 1
+        try : 
+            mic_f1 += float(2*tp) / (2*tp + fn +fp)
+        except :
+            pass
+
+    TP=0
+    TN=0
+    FP=0
+    FN=0
+    for a,b in zip(labels, pred_th):
+
+        if int(a)==0 and b==0:
+            TN+=1
+        if int(a)==1 and b==1:
+            TP+=1
+        if int(a)==0 and b==1:
+            FP+=1
+        if int(a)==1 and b==0:
+            FN+=1 
+    print ("TP = {}, TN = {},FP = {}, FN = {}".format(TP,TN,FP,FN))
+    F1 = float(2*TP)/(2*TP + FP+ FN)
+    EM = float(em_cnt)/len(test_indices)
+    DS = float(ds_cnt)/len(test_indices)
+    uF1= float(mic_f1)/len(test_indices)
+    print ("EM Accuracy : {}".format(EM))
+    print ("DS Accuracy : {}".format(DS))
+    print ("Micro F1    : {}".format(uF1))
+    print ("Macro F1 Score = {}".format(F1))
+    return (pred_d, labels_d)
+
+# Tuned-Hyper Parameters
+embed_size = 1024
+hidden_size = 32
+num_epochs=30
+layer_size = 16
+batch_size = 64
+
+# 'Uni' : Unidirectional LSTM  |  'Bi' : Bidirectional LSTM  | 'TD' : Target-dependent LSTM
+mode = 'Uni' 
+augmentation = False
+
+def model(train_l,train_r,train_m,train_pos,train_ner,train_empath,train_labels,test_l,test_r,test_m,test_pos,test_ner,test_empath,test_labels,test_indices):
+    
+    x=Input(shape=(78, 300))
+    y=Input(shape=(78, 300))
+    z=Input(shape=(1, 300))
+    z1=Input(shape=([1,34]))
+    z2=Input(shape=([1,2]))
+    # z3=Input(shape=([64]))
+    z4=Input(shape=([194]))
+
+    if mode == 'Bi':
+    	left_out=Bidirectional(LSTM(hidden_size//2,return_sequences=False),input_shape=(train_l.shape[1:]))(x)      
+    	middle = Bidirectional(LSTM(hidden_size//2,return_sequences=False),input_shape=(train_m.shape[1:]))(z)
+    	right_out=Bidirectional(LSTM(hidden_size//2,return_sequences=False),input_shape=(train_r.shape[1:]))(y)
+
+    else:
+    	left_out  = LSTM(hidden_size,return_sequences=False)(x)
+    	middle    = LSTM(hidden_size,return_sequences=False)(z)
+    	right_out = LSTM(hidden_size,return_sequences=False)(y)
+
+    pos_dense=Dense(32,activation='relu')(z1)
+    ner_dense=Dense(16,activation='relu')(z2)
+    # liwc_dense=Dense(64,activation='relu')(z3)
+    empath_dense=Dense(64,activation='relu')(z4)
+
+    if mode == 'TD' and augmentation == False :
+      out=concatenate([left_out,right_out],axis=-1)
+
+    if mode == 'TD' and augmentation == True :
+    	out=concatenate([left_out,right_out,pos_dense,ner_dense,empath_dense],axis=-1)
+
+    if mode != 'TD' and augmentation == False :
+      out=concatenate([left_out,middle,right_out],axis=-1)
+
+    if mode != 'TD' and augmentation == True :
+    	out=concatenate([left_out,middle,right_out,pos_dense,ner_dense,empath_dense],axis=-1)
+
+    out=Dense(layer_size, activation='relu')(out)
+    output=Dense(1, activation='sigmoid')(out)
+    model = Model(inputs=[x,y,z,z1,z2,z4], outputs=output)
+    model.compile(optimizer=Adam(lr=10e-5),loss='binary_crossentropy',metrics=['accuracy'])
+    print ("Starting Epochs")
+    for i in range(num_epochs):
+        model.fit([train_l,train_r,train_m,train_pos,train_ner,train_empath],train_labels,batch_size=batch_size, epochs=1,verbose=0)
+        print('***************************************************************')
+        print ("predicting_ Epoch : {}".format(i))
+        pred_val=[]
+        pred_val.append(model.predict([test_l,test_r,test_m,test_pos,test_ner,test_empath]))
+        pre_d, lab_d = accuracy (pred_val, test_labels,test_indices)
+
+        # with open('Tweets Aug-{}.csv'.format(i), mode='w') as file:
+        #     file_writer = csv.writer(file, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+        #     for a,b in zip (pre_d,lab_d):
+        #         file_writer.writerow([a,b])
+    return model
 
 # Dataset division for 3-fold cross validation
 indices = list(range(len(comp)))
@@ -345,7 +472,8 @@ bins.append(indices[int(0.66*len(indices)):])
 for i in range (3):
     print ("Fold {}".format(i+1))
     print (len(bins[0] + bins[1]),len(bins[2]))
-    train_left,train_right,train_middle,pos_vec_train,ner_vec_train,liwc_vec_train,empath_vec_train,train_labels,val_left,val_right,val_middle,pos_vec_val,ner_vec_val,liwc_vec_val,empath_vec_val,val_labels = prep (bins[i%3] + bins[(i+1)%3], bins[(i+2)%3])
-    Sar_model=model(train_left,train_right,train_middle,pos_vec_train,ner_vec_train,liwc_vec_train,empath_vec_train,train_labels,val_left,val_right,val_middle,pos_vec_val,ner_vec_val,liwc_vec_val,empath_vec_val,val_labels,bins[(i+2)%3])
+    train_left,train_right,train_middle,pos_vec_train,ner_vec_train,empath_vec_train,train_labels,val_left,val_right,val_middle,pos_vec_val,ner_vec_val,empath_vec_val,val_labels = prep (bins[i%3] + bins[(i+1)%3], bins[(i+2)%3])
+    Sar_model=model(train_left,train_right,train_middle,pos_vec_train,ner_vec_train,empath_vec_train,train_labels,val_left,val_right,val_middle,pos_vec_val,ner_vec_val,empath_vec_val,val_labels,bins[(i+2)%3])
     Sar_model.save_weights("Bert Tweets Aug.h5")
     print("Saved model to disk")
+
