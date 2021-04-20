@@ -15,6 +15,19 @@ d. Mount your google drive.<br/>
 
 ## The code appproximately takes 40 minutes to run, once the code execution is finished, iterate to the last cell, to view the prediction accuracy over the training. 
 
+## **Steps to translate the dataset**
+
+## 1 - Prepare the dataset
+a. Use "snippets.xlsx" from Dataset folder and upload it to colab notebook.<br/>
+
+## 2 - Run the code
+a. Open google colab and upload the 'Translate.ipynb' from the code folder.<br/>
+b. Go to runtime and click 'Run all', which will run all cells in sequential order.<br/>
+c. The first cell will ask for the dataset, Upload the 'snippets.xlsx' file.<br/>
+d. Download the 'snippetsHindi.xlsx' file from the colab notebook.<br/>
+
+## The code runs almost instantaneously.
+
 ## **Steps to run improvement on base paper**
 
 ## 1 - Prepare the dataset
@@ -27,6 +40,6 @@ b. Go to runtime and click 'Run all', which will run all cells in sequential ord
 c. The first cell will ask for the dataset, Upload the 'snippetsHindi.xlsx' file.<br/>
 d. Mount your google drive.<br/>
 
-## The code appproximately takes 40 minutes to run, once the code execution is finished, iterate to the last cell, to view the prediction accuracy over the training.
+## The code appproximately takes 15 minutes to run, once the code execution is finished, iterate to the last cell, to view the prediction accuracy over the training.
 
 
