@@ -19,7 +19,7 @@ d. Mount your google drive.<br/>
 
 ## 1 - Prepare the dataset
 a. Use "snippetsHindi.xlsx" from Dataset folder and upload it to colab notebook.<br/>
-b. Use this shareable google drive link 'https://drive.google.com/file/d/1vtEb7E9mnSD1udqmUSHrgzqcoBMRQ0sA/view?usp=sharing' and choose 'Make copy', to include ''.<br/>
+b. Use this shareable google drive link 'https://drive.google.com/file/d/1vtEb7E9mnSD1udqmUSHrgzqcoBMRQ0sA/view?usp=sharing' and choose 'Make copy', to include 'gloveHindi.txt'.<br/>
 
 ## 2 - Run the code
 a. Open google colab and upload the 'SMDM_CodeBase_IMPROVEMENT.ipynb' from the code folder.<br/>
